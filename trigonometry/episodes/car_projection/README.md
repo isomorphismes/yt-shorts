@@ -1,6 +1,7 @@
 # Car projection at a fixed 55 mph
 
-First production Short from the car/road-angle experiment in `trigonometry/cars-at-road-angles.md`.
+First production Short from the car/road-angle research note now kept in Walnut & Burgundy:
+https://github.com/walnut-burgundy/alphabet-of-mathematics/blob/master/research/trigonometry/cars-at-road-angles.md
 
 ## Mathematical contract
 
@@ -43,7 +44,7 @@ The modest change in the across-view component is not exaggerated: from 55.0 mph
 
 ## Source / reuse boundary
 
-No external image, footage, map, car icon, or road asset is used. The episode is an original schematic redraw of elementary vector projection, derived from the repository's own trigonometry notes. There is therefore no additional media-license or attribution boundary for the rendered episode.
+No external image, footage, map, car icon, or road asset is used. The episode is an original schematic redraw of elementary vector projection, derived from the Walnut & Burgundy trigonometry research note linked above. There is therefore no additional media-license or attribution boundary for the rendered episode.
 
 ## Manimi boundary
 
