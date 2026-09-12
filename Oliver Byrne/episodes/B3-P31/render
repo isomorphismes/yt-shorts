@@ -1,0 +1,14 @@
+#!/usr/bin/env ysh
+
+# Grease/YSH entry point for the Byrne III.31 Short.
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
+if ! command -v ithon >/dev/null 2>&1; then
+  printf 'render: Ithon is required; expected an ithon executable on PATH\n' >&2
+  exit 127
+fi
+
+cd "$SCRIPT_DIR"
+exec ithon scene.pi
