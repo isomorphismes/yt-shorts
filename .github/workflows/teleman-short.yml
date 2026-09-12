@@ -1,0 +1,32 @@
+name: Teleman short
+
+on:
+  push:
+    paths:
+      - 'teleman-cyclic-group/**'
+      - '.github/workflows/teleman-short.yml'
+  pull_request:
+    paths:
+      - 'teleman-cyclic-group/**'
+      - '.github/workflows/teleman-short.yml'
+  workflow_dispatch:
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg poppler-utils espeak fonts-noto-core
+      - name: Install Python dependencies
+        run: python -m pip install -r teleman-cyclic-group/requirements.txt
+      - name: Render
+        working-directory: teleman-cyclic-group
+        run: make draft
+      - uses: actions/upload-artifact@v4
+        with:
+          name: teleman-cyclic-group-draft
+          path: teleman-cyclic-group/build/teleman-cyclic-group-draft.mp4
