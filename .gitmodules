@@ -1,0 +1,3 @@
+[submodule "third_party/wegert"]
+	path = third_party/wegert
+	url = https://github.com/isomorphisms/wegert.git
