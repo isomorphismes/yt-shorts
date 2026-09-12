@@ -1,0 +1,9 @@
+no_suffix	YT-LANGUAGE-FORBIDDEN	ci	.py,.sh
+suffix_first_line	YT-GREASE-SHEBANG	ci	.ysh	#!/usr/bin/env ysh
+script_runner	YT-GREASE-INVOCATION	.github/workflows/youtube-smoke.yml	ci/test_ai_ci_consumer.ysh	.grease/source/bin/ysh
+not_contains	YT-POSIX-TRAP-CONSUMER	ci/test_ai_ci_consumer.ysh	trap '
+not_contains	YT-POSIX-TRAP-BRAND	ci/youtube_brand.ysh	trap '
+not_contains	YT-POSIX-TRAP-CHECK	ci/youtube_check.ysh	trap '
+not_contains	YT-POSIX-TRAP-MEDIA-TEST	ci/test_media_compose.ysh	trap '
+not_contains	YT-POSIX-TRAP-RELEASE-TEST	ci/test_short_release_check.ysh	trap '
+not_contains	YT-POSIX-TRAP-UPLOAD	ci/youtube_upload.ysh	trap '

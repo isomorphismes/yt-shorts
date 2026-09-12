@@ -1,0 +1,6 @@
+nonempty	YT-NARRATIVE-SCRIPT-EMPTY	script.txt
+equal	YT-NARRATIVE-SCRIPT-VOICEOVER	script.txt	voiceover.txt
+equal	YT-NARRATIVE-SCRIPT-CAPTIONS	script.txt	captions.txt
+nonempty	YT-PROVENANCE-MANIFEST-EMPTY	sources.tsv
+tsv_header	YT-PROVENANCE-HEADER	sources.tsv	asset,creator,source_url,license,license_url,modifications,history,attribution
+tsv	YT-PROVENANCE-FIELDS	sources.tsv	8	2

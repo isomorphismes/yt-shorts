@@ -1,0 +1,3 @@
+nonempty	YT-EVAL-CASES-EMPTY	ci/ai-ci/evals/cases.tsv
+tsv_header	YT-EVAL-CASES-HEADER	ci/ai-ci/evals/cases.tsv	case_id,failure_class,objective,input_or_fixture,expected_outcome,oracle,grader_type,required_evidence,variant_family,data_source,split,minimum_trials,blocking
+tsv	YT-EVAL-CASES-FIELDS	ci/ai-ci/evals/cases.tsv	13	2

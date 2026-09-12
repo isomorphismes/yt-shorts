@@ -1,0 +1,260 @@
+#!/usr/bin/env ysh
+
+# Upload one rendered Short with the YouTube Data API.
+# This is run by the Grease YSH implementation checked out by CI.
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+usage() {
+  cat <<'EOF'
+usage: youtube_upload.ysh --video PATH --title TITLE [options]
+
+options:
+  --description TEXT
+  --privacy private|unlisted|public   (default: private)
+  --category-id ID                    (default: 27 / Education)
+  --made-for-kids true|false          (default: false)
+  --dry-run                           validate and print metadata; do not authenticate or upload
+EOF
+}
+
+video_path=''
+title=''
+description=''
+privacy_status='private'
+category_id='27'
+made_for_kids='false'
+dry_run='false'
+
+while test "$#" -gt 0; do
+  case "$1" in
+    --video)
+      video_path=$2
+      shift 2
+      ;;
+    --title)
+      title=$2
+      shift 2
+      ;;
+    --description)
+      description=$2
+      shift 2
+      ;;
+    --privacy)
+      privacy_status=$2
+      shift 2
+      ;;
+    --category-id)
+      category_id=$2
+      shift 2
+      ;;
+    --made-for-kids)
+      made_for_kids=$2
+      shift 2
+      ;;
+    --dry-run)
+      dry_run='true'
+      shift
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+if test -z "$video_path"; then
+  echo '--video is required' >&2
+  exit 2
+fi
+if test -z "$title"; then
+  echo '--title is required' >&2
+  exit 2
+fi
+if ! test -f "$video_path"; then
+  echo "video not found: $video_path" >&2
+  exit 2
+fi
+
+case "$privacy_status" in
+  private|unlisted|public) ;;
+  *)
+    echo "invalid privacy status: $privacy_status" >&2
+    exit 2
+    ;;
+esac
+
+case "$made_for_kids" in
+  true|false) ;;
+  *)
+    echo '--made-for-kids must be true or false' >&2
+    exit 2
+    ;;
+esac
+
+for command_name in ffprobe jq awk; do
+  if ! command -v "$command_name" >/dev/null 2>&1; then
+    echo "required command not found: $command_name" >&2
+    exit 2
+  fi
+done
+
+probe_json=$(ffprobe \
+  -v error \
+  -select_streams v:0 \
+  -show_entries stream=width,height:format=duration \
+  -of json \
+  "$video_path")
+
+width=$(printf '%s\n' "$probe_json" | jq -er '.streams[0].width')
+height=$(printf '%s\n' "$probe_json" | jq -er '.streams[0].height')
+duration=$(printf '%s\n' "$probe_json" | jq -er '.format.duration | tonumber')
+
+if test "$height" -lt "$width"; then
+  echo "not a YouTube Short shape: ${width}x${height} is landscape" >&2
+  exit 2
+fi
+
+if ! awk -v duration="$duration" 'BEGIN { exit !(duration > 0 && duration <= 180.0) }'; then
+  echo "not a YouTube Short duration: ${duration}s (must be > 0 and <= 180s)" >&2
+  exit 2
+fi
+
+metadata=$(jq -n \
+  --arg title "$title" \
+  --arg description "$description" \
+  --arg category "$category_id" \
+  --arg privacy "$privacy_status" \
+  --argjson made_for_kids "$made_for_kids" \
+  '{
+    snippet: {
+      title: $title,
+      description: $description,
+      categoryId: $category
+    },
+    status: {
+      privacyStatus: $privacy,
+      selfDeclaredMadeForKids: $made_for_kids
+    }
+  }')
+
+echo "Short validation: ${width}x${height}, ${duration}s"
+
+if test "$dry_run" = 'true'; then
+  echo 'Dry run: metadata follows; no network request made.'
+  printf '%s\n' "$metadata" | jq .
+  exit 0
+fi
+
+for command_name in curl wc tr mktemp; do
+  if ! command -v "$command_name" >/dev/null 2>&1; then
+    echo "required command not found: $command_name" >&2
+    exit 2
+  fi
+done
+
+: "${YOUTUBE_CLIENT_ID:?YOUTUBE_CLIENT_ID is required}"
+: "${YOUTUBE_CLIENT_SECRET:?YOUTUBE_CLIENT_SECRET is required}"
+: "${YOUTUBE_REFRESH_TOKEN:?YOUTUBE_REFRESH_TOKEN is required}"
+
+token_body=$(mktemp)
+init_headers=$(mktemp)
+init_body=$(mktemp)
+upload_body=$(mktemp)
+trap --add EXIT {
+  rm -f "$token_body" "$init_headers" "$init_body" "$upload_body"
+}
+
+token_code=$(curl -sS \
+  -o "$token_body" \
+  -w '%{http_code}' \
+  -X POST \
+  --data-urlencode "client_id=$YOUTUBE_CLIENT_ID" \
+  --data-urlencode "client_secret=$YOUTUBE_CLIENT_SECRET" \
+  --data-urlencode "refresh_token=$YOUTUBE_REFRESH_TOKEN" \
+  --data-urlencode 'grant_type=refresh_token' \
+  https://oauth2.googleapis.com/token)
+
+case "$token_code" in
+  2*) ;;
+  *)
+    echo "OAuth token exchange failed (HTTP $token_code):" >&2
+    cat "$token_body" >&2
+    exit 1
+    ;;
+esac
+
+access_token=$(jq -er '.access_token' "$token_body")
+if test "${GITHUB_ACTIONS:-}" = 'true'; then
+  printf '::add-mask::%s\n' "$access_token"
+fi
+
+file_size=$(wc -c < "$video_path" | tr -d '[:space:]')
+
+init_code=$(curl -sS \
+  -D "$init_headers" \
+  -o "$init_body" \
+  -w '%{http_code}' \
+  -X POST \
+  -H "Authorization: Bearer $access_token" \
+  -H 'Content-Type: application/json; charset=UTF-8' \
+  -H 'X-Upload-Content-Type: video/mp4' \
+  -H "X-Upload-Content-Length: $file_size" \
+  --data-binary "$metadata" \
+  'https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet%2Cstatus')
+
+case "$init_code" in
+  2*) ;;
+  *)
+    echo "YouTube upload initialization failed (HTTP $init_code):" >&2
+    cat "$init_body" >&2
+    exit 1
+    ;;
+esac
+
+upload_url=$(awk 'tolower($1) == "location:" { print $2; exit }' "$init_headers" | tr -d '\r')
+if test -z "$upload_url"; then
+  echo 'YouTube did not return a resumable upload URL.' >&2
+  cat "$init_headers" >&2
+  exit 1
+fi
+
+upload_code=$(curl -sS \
+  -o "$upload_body" \
+  -w '%{http_code}' \
+  -X PUT \
+  -H "Authorization: Bearer $access_token" \
+  -H 'Content-Type: video/mp4' \
+  --data-binary "@$video_path" \
+  "$upload_url")
+
+case "$upload_code" in
+  2*) ;;
+  *)
+    echo "YouTube upload failed (HTTP $upload_code):" >&2
+    cat "$upload_body" >&2
+    exit 1
+    ;;
+esac
+
+video_id=$(jq -er '.id' "$upload_body")
+video_url="https://www.youtube.com/watch?v=$video_id"
+
+echo "Uploaded YouTube video: $video_id"
+echo "$video_url"
+
+if test -n "${GITHUB_OUTPUT:-}"; then
+  printf 'video_id=%s\n' "$video_id" >> "$GITHUB_OUTPUT"
+  printf 'video_url=%s\n' "$video_url" >> "$GITHUB_OUTPUT"
+fi
+
+if test -n "${GITHUB_STEP_SUMMARY:-}"; then
+  printf 'Uploaded YouTube video `%s`: %s\n' "$video_id" "$video_url" >> "$GITHUB_STEP_SUMMARY"
+fi

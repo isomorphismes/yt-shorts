@@ -1,0 +1,8 @@
+# The existing executable smoke and release checks remain authoritative. These
+# assertions stop the workflow from silently bypassing or ceasing to run them.
+yaml_forbid_key	YT-SMOKE-CONTINUE	.github/workflows/youtube-smoke.yml	continue-on-error
+not_contains	YT-SMOKE-SWALLOW-OR	.github/workflows/youtube-smoke.yml	||
+not_contains	YT-SMOKE-SWALLOW-SET	.github/workflows/youtube-smoke.yml	set +e
+actions_pinned	YT-SMOKE-ACTION-PIN	.github/workflows/youtube-smoke.yml
+not_contains	YT-SMOKE-MUTABLE-GREASE	.github/workflows/youtube-smoke.yml	ref: main
+yaml_paths	YT-SMOKE-PATH-COVERAGE	ci/ai-ci/critical-paths.txt	.github/workflows/youtube-smoke.yml	pull_request

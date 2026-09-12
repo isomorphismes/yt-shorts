@@ -1,0 +1,128 @@
+#!/usr/bin/env ysh
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+aici_source=${AICI_SOURCE:-.ai-ci/src/aici.c}
+if ! test -f "$aici_source"; then
+  echo "ai-ci verifier source not found: $aici_source" >&2
+  exit 2
+fi
+
+for command_name in awk cc cp grep mkdir mktemp mv sed; do
+  if ! command -v "$command_name" >/dev/null 2>&1; then
+    echo "required consumer-test command not found: $command_name" >&2
+    exit 2
+  fi
+done
+
+tmp_dir=$(mktemp -d)
+trap --add EXIT {
+  rm -rf "$tmp_dir"
+}
+aici_bin="$tmp_dir/aici"
+cc -std=c17 -Wall -Wextra -Werror -pedantic -O2 -o "$aici_bin" "$aici_source"
+
+expect_rejection() {
+  label=$1
+  contract=$2
+  root=$3
+  expected_code=$4
+  evidence="$tmp_dir/$label.jsonl"
+
+  if "$aici_bin" verify "$contract" "$root" > "$evidence"; then
+    echo "ai-ci unexpectedly accepted escaped defect: $label" >&2
+    exit 1
+  fi
+  if ! grep -F "\"status\":\"fail\",\"code\":\"$expected_code\"" "$evidence" >/dev/null; then
+    echo "ai-ci rejected $label for the wrong reason; expected $expected_code" >&2
+    sed -n '1,8p' "$evidence" >&2
+    exit 1
+  fi
+  echo "rejected $label: $expected_code"
+}
+
+copy_workflow_case() {
+  case_root=$1
+  mkdir -p "$case_root/.github/workflows" "$case_root/ci/ai-ci"
+  cp .github/workflows/youtube-smoke.yml "$case_root/.github/workflows/"
+  cp ci/ai-ci/critical-paths.txt "$case_root/ci/ai-ci/"
+}
+
+case_root="$tmp_dir/mutable-action"
+copy_workflow_case "$case_root"
+sed '0,/actions\/checkout@[0-9a-f]\{40\}/s//actions\/checkout@v4/' \
+  "$case_root/.github/workflows/youtube-smoke.yml" > "$case_root/workflow.tmp"
+mv "$case_root/workflow.tmp" "$case_root/.github/workflows/youtube-smoke.yml"
+expect_rejection mutable-action ci/ai-ci/contracts/youtube-workflow.contract.tsv \
+  "$case_root" YT-SMOKE-ACTION-PIN
+
+case_root="$tmp_dir/omitted-path"
+copy_workflow_case "$case_root"
+grep -F -v "      - 'ci/**'" "$case_root/.github/workflows/youtube-smoke.yml" \
+  > "$case_root/workflow.tmp"
+mv "$case_root/workflow.tmp" "$case_root/.github/workflows/youtube-smoke.yml"
+expect_rejection omitted-release-path ci/ai-ci/contracts/youtube-workflow.contract.tsv \
+  "$case_root" YT-SMOKE-PATH-COVERAGE
+
+case_root="$tmp_dir/bad-shebang"
+mkdir -p "$case_root/.github/workflows"
+cp -R ci "$case_root/"
+cp .github/workflows/youtube-smoke.yml "$case_root/.github/workflows/"
+sed '1s|.*|#!/bin/sh|' "$case_root/ci/youtube_upload.ysh" > "$case_root/youtube-upload.tmp"
+mv "$case_root/youtube-upload.tmp" "$case_root/ci/youtube_upload.ysh"
+expect_rejection bad-ysh-shebang ci/ai-ci/contracts/youtube-language.contract.tsv \
+  "$case_root" YT-GREASE-SHEBANG
+
+case_root="$tmp_dir/hidden-grease"
+mkdir -p "$case_root/.github/workflows"
+cp -R ci "$case_root/"
+awk '
+  index($0, "run: .grease/source/bin/ysh ci/test_ai_ci_consumer.ysh") {
+    print "        run: |"
+    print "          .grease/source/bin/ysh ci/test_ai_ci_consumer.ysh"
+    next
+  }
+  { print }
+' .github/workflows/youtube-smoke.yml > "$case_root/.github/workflows/youtube-smoke.yml"
+expect_rejection hidden-grease-invocation ci/ai-ci/contracts/youtube-language.contract.tsv \
+  "$case_root" YT-GREASE-INVOCATION
+
+case_root="$tmp_dir/posix-trap"
+mkdir -p "$case_root/.github/workflows"
+cp -R ci "$case_root/"
+cp .github/workflows/youtube-smoke.yml "$case_root/.github/workflows/"
+awk '
+  index($0, "trap --add EXIT {") {
+    print "trap \047rm -rf \042$tmp_dir\042\047 EXIT"
+    next
+  }
+  { print }
+' "$case_root/ci/youtube_brand.ysh" > "$case_root/youtube-brand.tmp"
+mv "$case_root/youtube-brand.tmp" "$case_root/ci/youtube_brand.ysh"
+expect_rejection posix-string-trap ci/ai-ci/contracts/youtube-language.contract.tsv \
+  "$case_root" YT-POSIX-TRAP-BRAND
+
+case_root="$tmp_dir/narrative-drift"
+cp -R ci/ai-ci/release "$case_root"
+printf 'different voiceover text\n' > "$case_root/voiceover.txt"
+expect_rejection narrative-drift ci/ai-ci/contracts/youtube-release.contract.tsv \
+  "$case_root" YT-NARRATIVE-SCRIPT-VOICEOVER
+
+case_root="$tmp_dir/blank-history"
+cp -R ci/ai-ci/release "$case_root"
+awk -F '\t' 'BEGIN { OFS = "\t" } NR == 2 { $7 = "" } { print }' \
+  "$case_root/sources.tsv" > "$case_root/sources.tmp"
+mv "$case_root/sources.tmp" "$case_root/sources.tsv"
+expect_rejection blank-provenance-history ci/ai-ci/contracts/youtube-release.contract.tsv \
+  "$case_root" YT-PROVENANCE-FIELDS
+
+case_root="$tmp_dir/incomplete-eval"
+mkdir -p "$case_root/ci/ai-ci/evals"
+awk -F '\t' 'BEGIN { OFS = "\t" } NR == 2 { NF = 12 } { print }' \
+  ci/ai-ci/evals/cases.tsv > "$case_root/ci/ai-ci/evals/cases.tsv"
+expect_rejection incomplete-evaluation-row ci/ai-ci/contracts/youtube-evaluation.contract.tsv \
+  "$case_root" YT-EVAL-CASES-FIELDS
+
+echo 'ai-ci yt-shorts consumer regressions OK'

@@ -1,0 +1,96 @@
+#!/usr/bin/env ysh
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+source lib/media.ysh
+
+for command_name in go compare mktemp cp awk; do
+  if ! command -v "$command_name" >/dev/null 2>&1; then
+    echo "required test command not found: $command_name" >&2
+    exit 2
+  fi
+done
+
+if command -v magick >/dev/null 2>&1; then
+  image_command='magick'
+elif command -v convert >/dev/null 2>&1; then
+  image_command='convert'
+else
+  echo 'required test command not found: magick or convert' >&2
+  exit 2
+fi
+
+tmp_dir=$(mktemp -d)
+trap --add EXIT {
+  rm -rf "$tmp_dir"
+}
+
+base="$tmp_dir/base.png"
+source_image="$tmp_dir/source.png"
+grease_once="$tmp_dir/grease-once.png"
+go_once="$tmp_dir/go-once.png"
+grease_twice="$tmp_dir/grease-twice.png"
+go_twice="$tmp_dir/go-twice.png"
+
+$image_command -size 64x64 'xc:rgba(0,0,255,1)' "$base"
+$image_command -size 16x16 'xc:rgba(255,0,0,0.5)' "$source_image"
+
+media_over_image "$base" "$source_image" 10 12 "$grease_once"
+go run ci/testdata/image_draw_oracle.go "$base" "$source_image" 10 12 "$go_once"
+
+pixel_difference=$(compare -metric AE "$go_once" "$grease_once" null: 2>&1 || true)
+if test "$pixel_difference" != '0'; then
+  echo "Grease source-over differs from Go image/draw: $pixel_difference pixels" >&2
+  exit 1
+fi
+
+# Composition must remain the same when the output of one operation becomes the
+# input of the next operation.
+media_over_image "$grease_once" "$source_image" 30 32 "$grease_twice"
+go run ci/testdata/image_draw_oracle.go "$go_once" "$source_image" 30 32 "$go_twice"
+
+pixel_difference=$(compare -metric AE "$go_twice" "$grease_twice" null: 2>&1 || true)
+if test "$pixel_difference" != '0'; then
+  echo "chained Grease composition differs from Go image/draw: $pixel_difference pixels" >&2
+  exit 1
+fi
+
+text_file="$tmp_dir/caption.txt"
+text_image="$tmp_dir/text.png"
+printf 'composable\n' > "$text_file"
+media_text_image "$base" "$text_file" 4 4 18 white "$text_image"
+
+text_difference=$(compare -metric AE "$base" "$text_image" null: 2>&1 || true)
+if test "$text_difference" = '0'; then
+  echo 'file-backed text overlay did not change the image' >&2
+  exit 1
+fi
+
+cp "$base" "$tmp_dir/frame00.png"
+cp "$grease_once" "$tmp_dir/frame01.png"
+video="$tmp_dir/frames.mp4"
+media_frames "$tmp_dir/frame%02d.png" 2 "$video"
+
+probe=$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height:format=duration -of csv=p=0 "$video")
+width=$(printf '%s\n' "$probe" | awk -F ',' '{print $1}')
+height=$(printf '%s\n' "$probe" | awk -F ',' '{print $2}')
+duration=$(printf '%s\n' "$probe" | awk -F ',' '{print $3}')
+if test "$width" != '64' || test "$height" != '64'; then
+  echo "frame concatenation changed dimensions: ${width}x${height}" >&2
+  exit 1
+fi
+if ! awk -v duration="$duration" 'BEGIN { exit !(duration > 0) }'; then
+  echo "frame concatenation produced invalid duration: $duration" >&2
+  exit 1
+fi
+
+animated="$tmp_dir/animated.mp4"
+media_over_video "$video" "$source_image" '10+t*4' 8 0 1 "$animated"
+if ! test -s "$animated"; then
+  echo 'animated overlay did not produce a video' >&2
+  exit 1
+fi
+
+echo 'Media composition conformance OK'
