@@ -1,0 +1,109 @@
+#!/usr/bin/env ysh
+
+# Validate a source-controlled Short release bundle and optionally upload it.
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+usage() {
+  cat <<'EOF'
+usage: youtube_release.ysh --short-dir DIR [options]
+
+options:
+  --channel-id ID                     required for a real upload
+  --privacy private|unlisted|public   default: private
+  --category-id ID                    default: 27 / Education
+  --made-for-kids true|false          default: false
+  --dry-run                            run every local release/upload check only
+EOF
+}
+
+short_dir=''
+channel_id=''
+privacy_status='private'
+category_id='27'
+made_for_kids='false'
+dry_run='false'
+ysh_bin=${YSH_BIN:-.grease/source/bin/ysh}
+
+while test "$#" -gt 0; do
+  case "$1" in
+    --short-dir)
+      short_dir=$2
+      shift 2
+      ;;
+    --channel-id)
+      channel_id=$2
+      shift 2
+      ;;
+    --privacy)
+      privacy_status=$2
+      shift 2
+      ;;
+    --category-id)
+      category_id=$2
+      shift 2
+      ;;
+    --made-for-kids)
+      made_for_kids=$2
+      shift 2
+      ;;
+    --dry-run)
+      dry_run='true'
+      shift
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+if test -z "$short_dir"; then
+  echo '--short-dir is required' >&2
+  exit 2
+fi
+if ! test -x "$ysh_bin"; then
+  echo "Grease YSH not found: $ysh_bin" >&2
+  exit 2
+fi
+
+"$ysh_bin" ci/short_release_check.ysh --short-dir "$short_dir"
+
+video_path="$short_dir/short.mp4"
+title=$(cat "$short_dir/title.txt")
+description=$(cat "$short_dir/description.txt")
+
+if test "$dry_run" = 'true'; then
+  "$ysh_bin" ci/youtube_upload.ysh \
+    --video "$video_path" \
+    --title "$title" \
+    --description "$description" \
+    --privacy "$privacy_status" \
+    --category-id "$category_id" \
+    --made-for-kids "$made_for_kids" \
+    --dry-run
+  exit 0
+fi
+
+if test -z "$channel_id"; then
+  echo '--channel-id is required for a real upload' >&2
+  exit 2
+fi
+
+# The credential is checked against the intended channel before any write.
+"$ysh_bin" ci/youtube_check.ysh --channel-id "$channel_id"
+
+"$ysh_bin" ci/youtube_upload.ysh \
+  --video "$video_path" \
+  --title "$title" \
+  --description "$description" \
+  --privacy "$privacy_status" \
+  --category-id "$category_id" \
+  --made-for-kids "$made_for_kids"

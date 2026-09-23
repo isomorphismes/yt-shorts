@@ -1,0 +1,3 @@
+ci/**
+lib/**
+.github/workflows/youtube-smoke.yml

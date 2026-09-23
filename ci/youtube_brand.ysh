@@ -1,0 +1,295 @@
+#!/usr/bin/env ysh
+
+# Prepare YouTube channel art from the same source art used elsewhere and,
+# when explicitly requested, apply the banner through the YouTube Data API.
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+usage() {
+  cat <<'EOF_USAGE'
+usage: youtube_brand.ysh --header PATH [options]
+
+options:
+  --profile PATH          prepare a square profile image from the same source art
+  --output-dir PATH       generated asset directory (default: branding/generated)
+  --channel-id ID         require OAuth credentials to resolve to this channel
+  --apply                 upload and apply the generated banner
+  --help, -h
+
+Without --apply, this only generates local assets and makes no network request.
+The YouTube Data API can set the channel banner, but does not expose channel
+profile-picture upload; the generated profile image is therefore a manual asset.
+EOF_USAGE
+}
+
+header_source=''
+profile_source=''
+output_dir='branding/generated'
+expected_channel_id=''
+apply='false'
+
+while test "$#" -gt 0; do
+  case "$1" in
+    --header)
+      header_source=$2
+      shift 2
+      ;;
+    --profile)
+      profile_source=$2
+      shift 2
+      ;;
+    --output-dir)
+      output_dir=$2
+      shift 2
+      ;;
+    --channel-id)
+      expected_channel_id=$2
+      shift 2
+      ;;
+    --apply)
+      apply='true'
+      shift
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+if test -z "$header_source"; then
+  echo '--header is required' >&2
+  exit 2
+fi
+if ! test -f "$header_source"; then
+  echo "header image not found: $header_source" >&2
+  exit 2
+fi
+if test -n "$profile_source" && ! test -f "$profile_source"; then
+  echo "profile image not found: $profile_source" >&2
+  exit 2
+fi
+
+for command_name in mkdir mktemp rm wc tr; do
+  if ! command -v "$command_name" >/dev/null 2>&1; then
+    echo "required command not found: $command_name" >&2
+    exit 2
+  fi
+done
+
+if command -v magick >/dev/null 2>&1; then
+  image_command='magick'
+elif command -v convert >/dev/null 2>&1; then
+  image_command='convert'
+else
+  echo 'required ImageMagick command not found: magick or convert' >&2
+  exit 2
+fi
+
+mkdir -p "$output_dir"
+tmp_dir=$(mktemp -d)
+trap --add EXIT {
+  rm -rf "$tmp_dir"
+}
+
+banner_output="$output_dir/youtube-banner.jpg"
+profile_output="$output_dir/youtube-profile.jpg"
+background="$tmp_dir/banner-background.jpg"
+foreground="$tmp_dir/banner-foreground.png"
+
+# YouTube recommends 2560x1440. Keep the entire source header inside the
+# cross-device safe center (1235x338) and fill the remaining canvas with a
+# blurred copy of the same art rather than inventing new colors or graphics.
+$image_command "$header_source" \
+  -auto-orient \
+  -resize '2560x1440^' \
+  -gravity center \
+  -extent 2560x1440 \
+  -blur 0x36 \
+  "$background"
+
+$image_command "$header_source" \
+  -auto-orient \
+  -resize '1235x338>' \
+  "$foreground"
+
+$image_command "$background" "$foreground" \
+  -gravity center \
+  -compose over \
+  -composite \
+  -strip \
+  -quality 90 \
+  "$banner_output"
+
+banner_dimensions=$($image_command "$banner_output" -format '%wx%h' info:)
+banner_bytes=$(wc -c < "$banner_output" | tr -d '[:space:]')
+
+if test "$banner_dimensions" != '2560x1440'; then
+  echo "unexpected generated banner size: $banner_dimensions" >&2
+  exit 1
+fi
+if test "$banner_bytes" -gt 6000000; then
+  echo "generated banner is too large for YouTube: ${banner_bytes} bytes" >&2
+  exit 1
+fi
+
+echo "Prepared YouTube banner: $banner_output ($banner_dimensions, ${banner_bytes} bytes)"
+
+if test -n "$profile_source"; then
+  $image_command "$profile_source" \
+    -auto-orient \
+    -resize '800x800^' \
+    -gravity center \
+    -extent 800x800 \
+    -strip \
+    -quality 92 \
+    "$profile_output"
+  echo "Prepared YouTube profile image: $profile_output"
+  echo 'Profile upload remains a one-time manual step; the YouTube Data API has no profile-picture upload method.'
+fi
+
+if test "$apply" != 'true'; then
+  echo 'Prepared only; no network request made. Pass --apply to set the banner.'
+  exit 0
+fi
+
+for command_name in curl jq; do
+  if ! command -v "$command_name" >/dev/null 2>&1; then
+    echo "required command not found: $command_name" >&2
+    exit 2
+  fi
+done
+
+: "${YOUTUBE_CLIENT_ID:?YOUTUBE_CLIENT_ID is required}"
+: "${YOUTUBE_CLIENT_SECRET:?YOUTUBE_CLIENT_SECRET is required}"
+: "${YOUTUBE_REFRESH_TOKEN:?YOUTUBE_REFRESH_TOKEN is required}"
+
+token_body="$tmp_dir/token.json"
+channel_body="$tmp_dir/channel.json"
+banner_body="$tmp_dir/banner-upload.json"
+update_response="$tmp_dir/channel-update.json"
+
+token_code=$(curl -sS \
+  -o "$token_body" \
+  -w '%{http_code}' \
+  -X POST \
+  --data-urlencode "client_id=$YOUTUBE_CLIENT_ID" \
+  --data-urlencode "client_secret=$YOUTUBE_CLIENT_SECRET" \
+  --data-urlencode "refresh_token=$YOUTUBE_REFRESH_TOKEN" \
+  --data-urlencode 'grant_type=refresh_token' \
+  https://oauth2.googleapis.com/token)
+
+case "$token_code" in
+  2*) ;;
+  *)
+    echo "OAuth token exchange failed (HTTP $token_code):" >&2
+    cat "$token_body" >&2
+    exit 1
+    ;;
+esac
+
+access_token=$(jq -er '.access_token' "$token_body")
+if test "${GITHUB_ACTIONS:-}" = 'true'; then
+  printf '::add-mask::%s\n' "$access_token"
+fi
+
+channel_code=$(curl -sS \
+  -o "$channel_body" \
+  -w '%{http_code}' \
+  -H "Authorization: Bearer $access_token" \
+  'https://www.googleapis.com/youtube/v3/channels?part=snippet%2CbrandingSettings&mine=true')
+
+case "$channel_code" in
+  2*) ;;
+  *)
+    echo "YouTube channel lookup failed (HTTP $channel_code):" >&2
+    cat "$channel_body" >&2
+    exit 1
+    ;;
+esac
+
+channel_count=$(jq -er '.items | length' "$channel_body")
+if test "$channel_count" -ne 1; then
+  echo "expected exactly one OAuth channel, got $channel_count" >&2
+  cat "$channel_body" >&2
+  exit 1
+fi
+
+channel_id=$(jq -er '.items[0].id' "$channel_body")
+channel_title=$(jq -er '.items[0].snippet.title' "$channel_body")
+
+if test -n "$expected_channel_id" && test "$channel_id" != "$expected_channel_id"; then
+  echo "OAuth channel mismatch: expected $expected_channel_id, got $channel_id ($channel_title)" >&2
+  exit 1
+fi
+
+preserved_channel=$(jq -c '
+  .items[0].brandingSettings.channel // {}
+  | {
+      country,
+      description,
+      defaultLanguage,
+      keywords,
+      trackingAnalyticsAccountId,
+      unsubscribedTrailer
+    }
+  | with_entries(select(.value != null))
+' "$channel_body")
+
+banner_code=$(curl -sS \
+  -o "$banner_body" \
+  -w '%{http_code}' \
+  -X POST \
+  -H "Authorization: Bearer $access_token" \
+  -H 'Content-Type: image/jpeg' \
+  --data-binary "@$banner_output" \
+  "https://www.googleapis.com/upload/youtube/v3/channelBanners/insert?uploadType=media&channelId=$channel_id")
+
+case "$banner_code" in
+  2*) ;;
+  *)
+    echo "YouTube banner upload failed (HTTP $banner_code):" >&2
+    cat "$banner_body" >&2
+    exit 1
+    ;;
+esac
+
+banner_url=$(jq -er '.url' "$banner_body")
+
+update_body=$(jq -n \
+  --arg id "$channel_id" \
+  --arg banner_url "$banner_url" \
+  --argjson channel "$preserved_channel" \
+  '{
+    id: $id,
+    brandingSettings:
+      ((if ($channel | length) > 0 then {channel: $channel} else {} end)
+       + {image: {bannerExternalUrl: $banner_url}})
+  }')
+
+update_code=$(curl -sS \
+  -o "$update_response" \
+  -w '%{http_code}' \
+  -X PUT \
+  -H "Authorization: Bearer $access_token" \
+  -H 'Content-Type: application/json; charset=UTF-8' \
+  --data-binary "$update_body" \
+  'https://www.googleapis.com/youtube/v3/channels?part=brandingSettings')
+
+case "$update_code" in
+  2*) ;;
+  *)
+    echo "YouTube channel branding update failed (HTTP $update_code):" >&2
+    cat "$update_response" >&2
+    exit 1
+    ;;
+esac
+
+echo "Applied banner to YouTube channel: $channel_title ($channel_id)"

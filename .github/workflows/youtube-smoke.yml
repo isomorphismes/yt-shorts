@@ -1,0 +1,92 @@
+name: YouTube smoke
+
+on:
+  push:
+    paths:
+      - 'ci/**'
+      - 'lib/**'
+      - '.github/workflows/youtube-smoke.yml'
+      - '.github/workflows/youtube-upload.yml'
+  pull_request:
+    paths:
+      - 'ci/**'
+      - 'lib/**'
+      - '.github/workflows/youtube-smoke.yml'
+      - '.github/workflows/youtube-upload.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Enforce ai-ci consumer contracts
+        uses: isomorphisms/ai-ci@95f81aca4b545d4718f4791ec26f24a661fecc6b
+        with:
+          suite: ci/ai-ci/suite.tsv
+          root: .
+      - name: Checkout ai-ci for consumer regressions
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: isomorphisms/ai-ci
+          ref: 95f81aca4b545d4718f4791ec26f24a661fecc6b
+          path: .ai-ci
+      - name: Checkout Grease
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: isomorphisms/grease
+          ref: e963958976eaa80a2517bae3fd34b0e5115ffcbe
+          path: .grease
+          submodules: recursive
+      - name: Bootstrap Python 2 for pinned Grease
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/Python-2.7.18.tar.xz" \
+            https://www.python.org/ftp/python/2.7.18/Python-2.7.18.tar.xz
+          tar -xJf "$RUNNER_TEMP/Python-2.7.18.tar.xz" -C "$RUNNER_TEMP"
+          cd "$RUNNER_TEMP/Python-2.7.18"
+          ./configure --prefix="$RUNNER_TEMP/python2" --without-ensurepip
+          make -j2
+          make install
+          echo "$RUNNER_TEMP/python2/bin" >> "$GITHUB_PATH"
+      - name: Install Grease build and media tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libreadline-dev ffmpeg jq curl imagemagick
+      - name: Build Grease dev runtime
+        run: |
+          cd .grease/source
+          build/py.sh minimal
+      - name: Prove escaped consumer defects stay rejected
+        run: .grease/source/bin/ysh ci/test_ai_ci_consumer.ysh
+      - name: Exercise uploader under Grease
+        run: |
+          mkdir -p /tmp/yt-shorts-ci
+          ffmpeg -hide_banner -loglevel error \
+            -f lavfi -i color=c=black:s=1080x1920:d=1 \
+            -pix_fmt yuv420p -y /tmp/yt-shorts-ci/test.mp4
+          .grease/source/bin/ysh ci/youtube_upload.ysh \
+            --video /tmp/yt-shorts-ci/test.mp4 \
+            --title 'CI smoke test' \
+            --description 'Local validation only' \
+            --privacy private \
+            --category-id 27 \
+            --made-for-kids false \
+            --dry-run
+      - name: Exercise branding and checker under Grease
+        run: |
+          ffmpeg -hide_banner -loglevel error \
+            -f lavfi -i color=c=black:s=1500x500 \
+            -frames:v 1 -y /tmp/yt-shorts-ci/header.png
+          ffmpeg -hide_banner -loglevel error \
+            -f lavfi -i color=c=black:s=800x800 \
+            -frames:v 1 -y /tmp/yt-shorts-ci/profile.png
+          .grease/source/bin/ysh ci/youtube_brand.ysh \
+            --header /tmp/yt-shorts-ci/header.png \
+            --profile /tmp/yt-shorts-ci/profile.png \
+            --output-dir /tmp/yt-shorts-ci/branding
+          test -s /tmp/yt-shorts-ci/branding/youtube-banner.jpg
+          test -s /tmp/yt-shorts-ci/branding/youtube-profile.jpg
+          .grease/source/bin/ysh ci/youtube_check.ysh --help >/dev/null

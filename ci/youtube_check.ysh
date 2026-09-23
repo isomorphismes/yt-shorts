@@ -1,0 +1,184 @@
+#!/usr/bin/env ysh
+
+# Check the YouTube channel represented by the configured OAuth refresh token.
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+usage() {
+  cat <<'EOF_USAGE'
+usage: youtube_check.ysh [options]
+
+options:
+  --channel-id ID    require OAuth credentials to resolve to this channel
+  --video-id ID      also verify one uploaded video and print its status
+  --json             print the full channel JSON after the summary
+  --help, -h
+EOF_USAGE
+}
+
+expected_channel_id=''
+video_id=''
+print_json='false'
+
+while test "$#" -gt 0; do
+  case "$1" in
+    --channel-id)
+      expected_channel_id=$2
+      shift 2
+      ;;
+    --video-id)
+      video_id=$2
+      shift 2
+      ;;
+    --json)
+      print_json='true'
+      shift
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+for command_name in curl jq mktemp rm; do
+  if ! command -v "$command_name" >/dev/null 2>&1; then
+    echo "required command not found: $command_name" >&2
+    exit 2
+  fi
+done
+
+: "${YOUTUBE_CLIENT_ID:?YOUTUBE_CLIENT_ID is required}"
+: "${YOUTUBE_CLIENT_SECRET:?YOUTUBE_CLIENT_SECRET is required}"
+: "${YOUTUBE_REFRESH_TOKEN:?YOUTUBE_REFRESH_TOKEN is required}"
+
+tmp_dir=$(mktemp -d)
+trap --add EXIT {
+  rm -rf "$tmp_dir"
+}
+
+token_body="$tmp_dir/token.json"
+channel_body="$tmp_dir/channel.json"
+video_body="$tmp_dir/video.json"
+
+token_code=$(curl -sS \
+  -o "$token_body" \
+  -w '%{http_code}' \
+  -X POST \
+  --data-urlencode "client_id=$YOUTUBE_CLIENT_ID" \
+  --data-urlencode "client_secret=$YOUTUBE_CLIENT_SECRET" \
+  --data-urlencode "refresh_token=$YOUTUBE_REFRESH_TOKEN" \
+  --data-urlencode 'grant_type=refresh_token' \
+  https://oauth2.googleapis.com/token)
+
+case "$token_code" in
+  2*) ;;
+  *)
+    echo "OAuth token exchange failed (HTTP $token_code):" >&2
+    cat "$token_body" >&2
+    exit 1
+    ;;
+esac
+
+access_token=$(jq -er '.access_token' "$token_body")
+if test "${GITHUB_ACTIONS:-}" = 'true'; then
+  printf '::add-mask::%s\n' "$access_token"
+fi
+
+channel_code=$(curl -sS \
+  -o "$channel_body" \
+  -w '%{http_code}' \
+  -H "Authorization: Bearer $access_token" \
+  'https://www.googleapis.com/youtube/v3/channels?part=snippet%2CbrandingSettings%2CcontentDetails%2Cstatus&mine=true')
+
+case "$channel_code" in
+  2*) ;;
+  *)
+    echo "YouTube channel lookup failed (HTTP $channel_code):" >&2
+    cat "$channel_body" >&2
+    exit 1
+    ;;
+esac
+
+channel_count=$(jq -er '.items | length' "$channel_body")
+if test "$channel_count" -ne 1; then
+  echo "expected exactly one OAuth channel, got $channel_count" >&2
+  cat "$channel_body" >&2
+  exit 1
+fi
+
+channel_id=$(jq -er '.items[0].id' "$channel_body")
+channel_title=$(jq -er '.items[0].snippet.title' "$channel_body")
+channel_handle=$(jq -r '.items[0].snippet.customUrl // empty' "$channel_body")
+profile_url=$(jq -r '.items[0].snippet.thumbnails.high.url // .items[0].snippet.thumbnails.default.url // empty' "$channel_body")
+banner_url=$(jq -r '
+  .items[0].brandingSettings.image
+  | .bannerImageUrl // .bannerTvImageUrl // .bannerMobileImageUrl // empty
+' "$channel_body")
+uploads_playlist=$(jq -r '.items[0].contentDetails.relatedPlaylists.uploads // empty' "$channel_body")
+made_for_kids=$(jq -r '.items[0].status.selfDeclaredMadeForKids // .items[0].status.madeForKids // "unspecified"' "$channel_body")
+
+if test -n "$expected_channel_id" && test "$channel_id" != "$expected_channel_id"; then
+  echo "OAuth channel mismatch: expected $expected_channel_id, got $channel_id ($channel_title)" >&2
+  exit 1
+fi
+
+printf 'channel: %s\n' "$channel_title"
+printf 'channel_id: %s\n' "$channel_id"
+if test -n "$channel_handle"; then
+  printf 'handle: %s\n' "$channel_handle"
+fi
+if test -n "$profile_url"; then
+  printf 'profile_image: %s\n' "$profile_url"
+else
+  echo 'profile_image: not returned'
+fi
+if test -n "$banner_url"; then
+  printf 'banner_image: %s\n' "$banner_url"
+else
+  echo 'banner_image: not returned or not set'
+fi
+if test -n "$uploads_playlist"; then
+  printf 'uploads_playlist: %s\n' "$uploads_playlist"
+fi
+printf 'made_for_kids: %s\n' "$made_for_kids"
+
+if test -n "$video_id"; then
+  video_code=$(curl -sS \
+    -o "$video_body" \
+    -w '%{http_code}' \
+    -H "Authorization: Bearer $access_token" \
+    "https://www.googleapis.com/youtube/v3/videos?part=snippet%2Cstatus&id=$video_id")
+
+  case "$video_code" in
+    2*) ;;
+    *)
+      echo "YouTube video lookup failed (HTTP $video_code):" >&2
+      cat "$video_body" >&2
+      exit 1
+      ;;
+  esac
+
+  video_count=$(jq -er '.items | length' "$video_body")
+  if test "$video_count" -ne 1; then
+    echo "video not found or not visible to these credentials: $video_id" >&2
+    exit 1
+  fi
+
+  video_title=$(jq -er '.items[0].snippet.title' "$video_body")
+  video_privacy=$(jq -er '.items[0].status.privacyStatus' "$video_body")
+  printf 'video: %s\n' "$video_title"
+  printf 'video_id: %s\n' "$video_id"
+  printf 'video_privacy: %s\n' "$video_privacy"
+fi
+
+if test "$print_json" = 'true'; then
+  jq . "$channel_body"
+fi

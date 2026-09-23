@@ -1,0 +1,203 @@
+name: YouTube automation
+
+# PR/push runs are validation-only; publishing stays an explicit manual action.
+on:
+  push:
+    paths:
+      - 'ci/youtube_upload.ysh'
+      - 'ci/youtube_brand.ysh'
+      - 'ci/youtube_check.ysh'
+      - 'docs/youtube-upload.md'
+      - 'docs/youtube-branding.md'
+      - '.github/workflows/youtube-upload.yml'
+  pull_request:
+    paths:
+      - 'ci/youtube_upload.ysh'
+      - 'ci/youtube_brand.ysh'
+      - 'ci/youtube_check.ysh'
+      - 'docs/youtube-upload.md'
+      - 'docs/youtube-branding.md'
+      - '.github/workflows/youtube-upload.yml'
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Branch, tag, or commit containing the rendered MP4
+        required: true
+        default: main
+        type: string
+      video_path:
+        description: Repository-relative path to rendered MP4
+        required: true
+        type: string
+      title:
+        description: YouTube video title
+        required: true
+        type: string
+      description:
+        description: YouTube video description
+        required: false
+        type: string
+      privacy_status:
+        description: YouTube privacy setting
+        required: true
+        default: private
+        type: choice
+        options:
+          - private
+          - unlisted
+          - public
+      category_id:
+        description: YouTube video category ID
+        required: true
+        default: '27'
+        type: string
+      made_for_kids:
+        description: Declare whether the video is made for kids
+        required: true
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+      publish:
+        description: Actually upload; false validates only
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Checkout Grease
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: isomorphisms/grease
+          ref: e963958976eaa80a2517bae3fd34b0e5115ffcbe
+          path: .grease
+          submodules: recursive
+      - name: Bootstrap Python 2 for pinned Grease
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/Python-2.7.18.tar.xz" \
+            https://www.python.org/ftp/python/2.7.18/Python-2.7.18.tar.xz
+          tar -xJf "$RUNNER_TEMP/Python-2.7.18.tar.xz" -C "$RUNNER_TEMP"
+          cd "$RUNNER_TEMP/Python-2.7.18"
+          ./configure --prefix="$RUNNER_TEMP/python2" --without-ensurepip
+          make -j2
+          make install
+          echo "$RUNNER_TEMP/python2/bin" >> "$GITHUB_PATH"
+      - name: Install Grease build and media tools
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libreadline-dev ffmpeg jq curl imagemagick
+      - name: Build Grease dev runtime
+        run: |
+          cd .grease/source
+          build/py.sh minimal
+      - name: Exercise uploader under Grease
+        shell: bash
+        run: |
+          mkdir -p /tmp/yt-shorts-ci
+          ffmpeg -hide_banner -loglevel error \
+            -f lavfi -i color=c=black:s=1080x1920:d=1 \
+            -pix_fmt yuv420p -y /tmp/yt-shorts-ci/test.mp4
+          ${{ github.workspace }}/.grease/source/bin/ysh ci/youtube_upload.ysh \
+            --video /tmp/yt-shorts-ci/test.mp4 \
+            --title 'CI smoke test' \
+            --description 'Local validation only' \
+            --privacy private \
+            --category-id 27 \
+            --made-for-kids false \
+            --dry-run
+      - name: Exercise branding and checker under Grease
+        shell: bash
+        run: |
+          ffmpeg -hide_banner -loglevel error \
+            -f lavfi -i color=c=black:s=1500x500 \
+            -frames:v 1 -y /tmp/yt-shorts-ci/header.png
+          ffmpeg -hide_banner -loglevel error \
+            -f lavfi -i color=c=black:s=800x800 \
+            -frames:v 1 -y /tmp/yt-shorts-ci/profile.png
+          ${{ github.workspace }}/.grease/source/bin/ysh ci/youtube_brand.ysh \
+            --header /tmp/yt-shorts-ci/header.png \
+            --profile /tmp/yt-shorts-ci/profile.png \
+            --output-dir /tmp/yt-shorts-ci/branding
+          test -s /tmp/yt-shorts-ci/branding/youtube-banner.jpg
+          test -s /tmp/yt-shorts-ci/branding/youtube-profile.jpg
+          ${{ github.workspace }}/.grease/source/bin/ysh ci/youtube_check.ysh --help >/dev/null
+
+  upload:
+    if: github.event_name == 'workflow_dispatch'
+    needs: smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout requested render ref
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ inputs.source_ref }}
+      - name: Checkout Grease
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: isomorphisms/grease
+          ref: e963958976eaa80a2517bae3fd34b0e5115ffcbe
+          path: .grease
+          submodules: recursive
+      - name: Bootstrap Python 2 for pinned Grease
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/Python-2.7.18.tar.xz" \
+            https://www.python.org/ftp/python/2.7.18/Python-2.7.18.tar.xz
+          tar -xJf "$RUNNER_TEMP/Python-2.7.18.tar.xz" -C "$RUNNER_TEMP"
+          cd "$RUNNER_TEMP/Python-2.7.18"
+          ./configure --prefix="$RUNNER_TEMP/python2" --without-ensurepip
+          make -j2
+          make install
+          echo "$RUNNER_TEMP/python2/bin" >> "$GITHUB_PATH"
+      - name: Install Grease build and media tools
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libreadline-dev ffmpeg jq curl
+      - name: Build Grease dev runtime
+        run: |
+          cd .grease/source
+          build/py.sh minimal
+      - name: Validate or upload Short
+        id: youtube
+        shell: bash
+        env:
+          VIDEO_PATH: ${{ inputs.video_path }}
+          VIDEO_TITLE: ${{ inputs.title }}
+          VIDEO_DESCRIPTION: ${{ inputs.description }}
+          PRIVACY_STATUS: ${{ inputs.privacy_status }}
+          CATEGORY_ID: ${{ inputs.category_id }}
+          MADE_FOR_KIDS: ${{ inputs.made_for_kids }}
+          PUBLISH: ${{ inputs.publish }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+        run: |
+          if test "$PUBLISH" = 'true'; then
+            ${{ github.workspace }}/.grease/source/bin/ysh ci/youtube_upload.ysh \
+              --video "$VIDEO_PATH" \
+              --title "$VIDEO_TITLE" \
+              --description "$VIDEO_DESCRIPTION" \
+              --privacy "$PRIVACY_STATUS" \
+              --category-id "$CATEGORY_ID" \
+              --made-for-kids "$MADE_FOR_KIDS"
+          else
+            ${{ github.workspace }}/.grease/source/bin/ysh ci/youtube_upload.ysh \
+              --video "$VIDEO_PATH" \
+              --title "$VIDEO_TITLE" \
+              --description "$VIDEO_DESCRIPTION" \
+              --privacy "$PRIVACY_STATUS" \
+              --category-id "$CATEGORY_ID" \
+              --made-for-kids "$MADE_FOR_KIDS" \
+              --dry-run
+          fi

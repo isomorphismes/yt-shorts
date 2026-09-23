@@ -1,0 +1,90 @@
+#!/usr/bin/env ysh
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+ysh_bin=${YSH_BIN:-.grease/source/bin/ysh}
+if ! test -x "$ysh_bin"; then
+  echo "Grease YSH not found: $ysh_bin" >&2
+  exit 2
+fi
+
+for command_name in ffmpeg mktemp sha256sum cp; do
+  if ! command -v "$command_name" >/dev/null 2>&1; then
+    echo "required test command not found: $command_name" >&2
+    exit 2
+  fi
+done
+
+tmp_dir=$(mktemp -d)
+trap --add EXIT {
+  rm -rf "$tmp_dir"
+}
+release="$tmp_dir/release"
+mkdir -p "$release/text"
+release_fixture='ci/ai-ci/release'
+
+ffmpeg -hide_banner -loglevel error \
+  -f lavfi -i color=c=black:s=64x128:d=1 \
+  -pix_fmt yuv420p -y "$release/short.mp4"
+
+printf 'A source-checked Short\n' > "$release/title.txt"
+printf 'The construction is source-checked.\n\nNigel Example — Example Work, CC BY 4.0, https://example.com/work\n' > "$release/description.txt"
+cp "$release_fixture/script.txt" "$release/script.txt"
+cp "$release_fixture/voiceover.txt" "$release/voiceover.txt"
+cp "$release_fixture/captions.txt" "$release/captions.txt"
+printf 'ON-SCREEN LABEL\n' > "$release/text/label.txt"
+cp "$release_fixture/sources.tsv" "$release/sources.tsv"
+
+make_hashes() {
+  (
+    cd "$release"
+    sha256sum \
+      short.mp4 \
+      title.txt \
+      description.txt \
+      script.txt \
+      voiceover.txt \
+      captions.txt \
+      sources.tsv \
+      text/label.txt \
+      > render-inputs.sha256
+  )
+}
+
+expect_failure() {
+  label=$1
+  if "$ysh_bin" ci/short_release_check.ysh --short-dir "$release" >/dev/null 2>&1; then
+    echo "release gate unexpectedly accepted: $label" >&2
+    exit 1
+  fi
+}
+
+make_hashes
+"$ysh_bin" ci/short_release_check.ysh --short-dir "$release" >/dev/null
+
+printf 'different voiceover text\n' > "$release/voiceover.txt"
+expect_failure 'voiceover/script mismatch'
+cp "$release/script.txt" "$release/voiceover.txt"
+
+printf 'different caption text\n' > "$release/captions.txt"
+expect_failure 'caption/script mismatch'
+cp "$release/script.txt" "$release/captions.txt"
+
+cp "$release/description.txt" "$release/description.saved"
+printf 'Attribution accidentally omitted.\n' > "$release/description.txt"
+expect_failure 'missing YouTube-description attribution'
+cp "$release/description.saved" "$release/description.txt"
+
+cp "$release/sources.tsv" "$release/sources.saved"
+printf 'asset\tcreator\tsource_url\tlicense\tlicense_url\tmodifications\thistory\tattribution\n' > "$release/sources.tsv"
+printf 'example.png\tNigel Example\thttps://example.com/work\tCC BY 4.0\thttps://creativecommons.org/licenses/by/4.0/\tnone\t\tNigel Example — Example Work, CC BY 4.0, https://example.com/work\n' >> "$release/sources.tsv"
+expect_failure 'blank source-history field'
+cp "$release/sources.saved" "$release/sources.tsv"
+
+make_hashes
+printf 'changed after render\n' >> "$release/text/label.txt"
+expect_failure 'on-screen text changed after render'
+
+echo 'Short release gate tests OK'

@@ -1,0 +1,108 @@
+#!/usr/bin/env ysh
+
+# Small composable media operations for Shorts.
+# Each operation takes files as values and writes one new file, so its output can
+# be passed directly to the next operation. Static overlays use ordinary
+# source-over alpha composition, matching Go image/draw's draw.Over semantics.
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+media_require() {
+  for command_name in ffmpeg ffprobe; do
+    if ! command -v "$command_name" >/dev/null 2>&1; then
+      echo "required media command not found: $command_name" >&2
+      return 2
+    fi
+  done
+}
+
+media_over_image() {
+  base=$1
+  source=$2
+  x=$3
+  y=$4
+  output=$5
+
+  media_require
+  ffmpeg -hide_banner -loglevel error \
+    -i "$base" \
+    -i "$source" \
+    -filter_complex "[0:v]format=rgba[base];[1:v]format=rgba[source];[base][source]overlay=x=$x:y=$y:format=rgb[out]" \
+    -map '[out]' \
+    -frames:v 1 \
+    -y "$output"
+}
+
+media_drawing_image() {
+  # A drawing is just another image with transparency. Keeping this an alias is
+  # intentional: drawings, photographs, labels, and sprites compose identically.
+  media_over_image "$@"
+}
+
+media_text_image() {
+  base=$1
+  text_file=$2
+  x=$3
+  y=$4
+  font_size=$5
+  font_color=$6
+  output=$7
+
+  media_require
+  if ! test -f "$text_file"; then
+    echo "text file not found: $text_file" >&2
+    return 2
+  fi
+  case "$text_file" in
+    *:*|*"'"*)
+      echo "text-file path cannot contain ':' or a single quote: $text_file" >&2
+      return 2
+      ;;
+  esac
+
+  # Text is file-backed rather than an inline string. This lets release CI bind
+  # the exact text input to the rendered artifact without OCR.
+  ffmpeg -hide_banner -loglevel error \
+    -i "$base" \
+    -vf "drawtext=textfile='$text_file':x=$x:y=$y:fontsize=$font_size:fontcolor=$font_color" \
+    -frames:v 1 \
+    -y "$output"
+}
+
+media_frames() {
+  frame_pattern=$1
+  frames_per_second=$2
+  output=$3
+
+  media_require
+  ffmpeg -hide_banner -loglevel error \
+    -framerate "$frames_per_second" \
+    -i "$frame_pattern" \
+    -c:v libx264 \
+    -pix_fmt yuv420p \
+    -y "$output"
+}
+
+media_over_video() {
+  base_video=$1
+  source_image=$2
+  x_expression=$3
+  y_expression=$4
+  start_time=$5
+  end_time=$6
+  output=$7
+
+  media_require
+  ffmpeg -hide_banner -loglevel error \
+    -i "$base_video" \
+    -loop 1 -i "$source_image" \
+    -filter_complex "[0:v][1:v]overlay=x='$x_expression':y='$y_expression':enable='between(t,$start_time,$end_time)'[out]" \
+    -map '[out]' \
+    -map '0:a?' \
+    -c:v libx264 \
+    -pix_fmt yuv420p \
+    -shortest \
+    -y "$output"
+}

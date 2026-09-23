@@ -1,0 +1,190 @@
+#!/usr/bin/env ysh
+
+# Validate the source-controlled release bundle before a Short can be uploaded.
+# Text is checked at the source level; this deliberately does not OCR pixels.
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+usage() {
+  cat <<'EOF'
+usage: short_release_check.ysh --short-dir DIR
+
+DIR must contain:
+  short.mp4
+  title.txt
+  description.txt
+  script.txt
+  voiceover.txt
+  captions.txt
+  sources.tsv
+  render-inputs.sha256
+
+script.txt, voiceover.txt, and captions.txt must be byte-for-byte identical.
+sources.tsv must use this tab-separated header:
+  asset creator source_url license license_url modifications history attribution
+
+Every source row must state the creator, source, license, modifications, history,
+and exact attribution text. Use explicit values such as "none" or "n/a" rather
+than leaving a field blank. Every attribution line must occur in description.txt.
+render-inputs.sha256 binds the release video and all of the checked text/source
+files to the render. Any text/*.txt overlay inputs must also be present in it.
+EOF
+}
+
+short_dir=''
+while test "$#" -gt 0; do
+  case "$1" in
+    --short-dir)
+      short_dir=$2
+      shift 2
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+if test -z "$short_dir"; then
+  echo '--short-dir is required' >&2
+  exit 2
+fi
+if ! test -d "$short_dir"; then
+  echo "Short release directory not found: $short_dir" >&2
+  exit 2
+fi
+
+for command_name in awk cmp grep head sha256sum sort find; do
+  if ! command -v "$command_name" >/dev/null 2>&1; then
+    echo "required command not found: $command_name" >&2
+    exit 2
+  fi
+done
+
+required_files='short.mp4 title.txt description.txt script.txt voiceover.txt captions.txt sources.tsv render-inputs.sha256'
+for name in $required_files; do
+  if ! test -f "$short_dir/$name"; then
+    echo "required release file missing: $short_dir/$name" >&2
+    exit 2
+  fi
+done
+
+if ! test -s "$short_dir/title.txt"; then
+  echo 'title.txt must not be empty' >&2
+  exit 2
+fi
+if ! test -s "$short_dir/description.txt"; then
+  echo 'description.txt must not be empty' >&2
+  exit 2
+fi
+
+if ! cmp -s "$short_dir/script.txt" "$short_dir/voiceover.txt"; then
+  echo 'voiceover.txt differs from script.txt; refusing release' >&2
+  exit 2
+fi
+if ! cmp -s "$short_dir/script.txt" "$short_dir/captions.txt"; then
+  echo 'captions.txt differs from script.txt; refusing release' >&2
+  exit 2
+fi
+
+expected_header=$(printf 'asset\tcreator\tsource_url\tlicense\tlicense_url\tmodifications\thistory\tattribution')
+actual_header=$(head -n 1 "$short_dir/sources.tsv")
+if test "$actual_header" != "$expected_header"; then
+  echo 'sources.tsv has the wrong header' >&2
+  printf 'expected: %s\n' "$expected_header" >&2
+  printf 'actual:   %s\n' "$actual_header" >&2
+  exit 2
+fi
+
+if ! awk -F '\t' '
+  NR == 1 { next }
+  {
+    if (NF != 8) {
+      printf "sources.tsv line %d has %d fields, expected 8\n", NR, NF > "/dev/stderr"
+      bad = 1
+      next
+    }
+    for (i = 1; i <= 8; i++) {
+      if ($i == "") {
+        printf "sources.tsv line %d field %d is blank\n", NR, i > "/dev/stderr"
+        bad = 1
+      }
+    }
+    lowered_license = tolower($4)
+    lowered_mods = tolower($6)
+    lowered_history = tolower($7)
+    if (lowered_license == "unknown" || lowered_license == "tbd" || lowered_license == "?") {
+      printf "sources.tsv line %d has unresolved license\n", NR > "/dev/stderr"
+      bad = 1
+    }
+    if (lowered_mods == "unknown" || lowered_mods == "tbd" || lowered_mods == "?") {
+      printf "sources.tsv line %d has unresolved modifications\n", NR > "/dev/stderr"
+      bad = 1
+    }
+    if (lowered_history == "unknown" || lowered_history == "tbd" || lowered_history == "?") {
+      printf "sources.tsv line %d has unresolved history\n", NR > "/dev/stderr"
+      bad = 1
+    }
+    if ($3 !~ /^https?:\/\// && $3 != "repo") {
+      printf "sources.tsv line %d source_url must be http(s) or repo\n", NR > "/dev/stderr"
+      bad = 1
+    }
+    if ($5 != "n/a" && $5 !~ /^https?:\/\//) {
+      printf "sources.tsv line %d license_url must be http(s) or n/a\n", NR > "/dev/stderr"
+      bad = 1
+    }
+    rows++
+  }
+  END {
+    if (rows == 0) {
+      print "sources.tsv must contain at least one source row" > "/dev/stderr"
+      bad = 1
+    }
+    exit bad
+  }
+' "$short_dir/sources.tsv"; then
+  exit 2
+fi
+
+tab=$(printf '\t')
+while IFS="$tab" read -r asset creator source_url license license_url modifications history attribution; do
+  if test "$asset" = 'asset'; then
+    continue
+  fi
+  if ! grep -F -- "$attribution" "$short_dir/description.txt" >/dev/null 2>&1; then
+    echo "description.txt is missing attribution for: $asset" >&2
+    echo "required text: $attribution" >&2
+    exit 2
+  fi
+done < "$short_dir/sources.tsv"
+
+(
+  cd "$short_dir"
+  sha256sum -c render-inputs.sha256
+)
+
+for name in short.mp4 title.txt description.txt script.txt voiceover.txt captions.txt sources.tsv; do
+  if ! grep -F "  $name" "$short_dir/render-inputs.sha256" >/dev/null 2>&1; then
+    echo "render-inputs.sha256 does not bind required input: $name" >&2
+    exit 2
+  fi
+done
+
+if test -d "$short_dir/text"; then
+  while IFS= read -r text_path; do
+    relative_path=${text_path#"$short_dir"/}
+    if ! grep -F "  $relative_path" "$short_dir/render-inputs.sha256" >/dev/null 2>&1; then
+      echo "render-inputs.sha256 does not bind on-screen text input: $relative_path" >&2
+      exit 2
+    fi
+  done < <(find "$short_dir/text" -type f -name '*.txt' -print | sort)
+fi
+
+echo "Release provenance OK: $short_dir"

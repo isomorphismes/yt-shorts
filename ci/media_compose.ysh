@@ -1,0 +1,60 @@
+#!/usr/bin/env ysh
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+source lib/media.ysh
+
+usage() {
+  cat <<'EOF'
+usage:
+  media_compose.ysh over-image BASE SOURCE X Y OUTPUT
+  media_compose.ysh drawing-image BASE DRAWING X Y OUTPUT
+  media_compose.ysh text-image BASE TEXT_FILE X Y FONT_SIZE COLOR OUTPUT
+  media_compose.ysh frames FRAME_PATTERN FPS OUTPUT
+  media_compose.ysh over-video BASE_VIDEO SOURCE_IMAGE X_EXPR Y_EXPR START END OUTPUT
+
+All operations are composable file transforms: the OUTPUT from one command can be
+used as BASE by the next. Text is always read from a file, never hidden inline.
+EOF
+}
+
+if test "$#" -lt 1; then
+  usage >&2
+  exit 2
+fi
+
+operation=$1
+shift
+
+case "$operation" in
+  over-image)
+    test "$#" -eq 5 || { usage >&2; exit 2; }
+    media_over_image "$@"
+    ;;
+  drawing-image)
+    test "$#" -eq 5 || { usage >&2; exit 2; }
+    media_drawing_image "$@"
+    ;;
+  text-image)
+    test "$#" -eq 7 || { usage >&2; exit 2; }
+    media_text_image "$@"
+    ;;
+  frames)
+    test "$#" -eq 3 || { usage >&2; exit 2; }
+    media_frames "$@"
+    ;;
+  over-video)
+    test "$#" -eq 7 || { usage >&2; exit 2; }
+    media_over_video "$@"
+    ;;
+  --help|-h|help)
+    usage
+    ;;
+  *)
+    echo "unknown media operation: $operation" >&2
+    usage >&2
+    exit 2
+    ;;
+esac
