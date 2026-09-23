@@ -1,0 +1,203 @@
+"""
+Design-only Manimi/Ithon scene skeleton for the Teleman plane → torus shot.
+
+DO NOT RENDER THIS YET.
+
+This file records the scene boundary and dependency seams without pretending
+that unfinished Manimi, Wegert, and Ithon APIs already exist.
+
+Blocking work:
+- isomorphisms/yt-shorts#4  Manimi textured lattice / quotient geometry
+- isomorphisms/wegert#19    renderer-independent Wegert coloring core
+- isomorphisms/ithon#4      first real Manimi WebGPU frame under Ithon
+
+Exact mathematical object:
+Use the doubly periodic meromorphic function
+
+    z(u) = 1 / sn(u, k)
+
+on the complex u-plane.  Jacobi sn obeys
+
+    (sn')^2 = (1 - sn^2)(1 - k^2 sn^2),
+
+therefore
+
+    (dz/du)^2 = (z^2 - 1)(z^2 - k^2).
+
+So (z(u), w(u)=dz/du) uniformizes Teleman's curve
+
+    w^2 = (z^2 - 1)(z^2 - k^2).
+
+For a fixed real 0 < k < 1, use the actual periods of z(u):
+
+    omega_1 = 4 K(k)
+    omega_2 = 2 i K'(k)
+
+and Lambda = <omega_1, omega_2>.
+
+The Wegert texture is the production domain coloring applied directly to
+z(u) on C.  The embedded torus carries the same u mod Lambda coordinates.
+Do not implement the repetition by tiling the old raw z-plane square-root
+render.
+"""
+
+from manimlib import Scene
+
+
+class TelemanEllipticPlaneToTorus(Scene):
+    """Storyboard-shaped scaffold; implementation deliberately blocked."""
+
+    def construct(self ∈ TelemanEllipticPlaneToTorus) → None:
+        self.require_unfinished_dependencies()
+
+        # Fixed-k mathematical source.  This owns sn(u,k), K, K', periods,
+        # z(u)=1/sn(u,k), and verification of the curve equation.
+        elliptic = self.make_teleman_elliptic_function()
+
+        # 1. Begin close on the genuine Wegert/domain coloring of z(u) on C.
+        cover = self.make_wegert_colored_complex_plane(elliptic)
+        self.add(cover)
+
+        # 2. Zoom out until genuine period translations become obvious.
+        self.zoom_out_to_reveal_periodicity(cover)
+
+        # 3. Sketch the actual rank-2 period lattice over the repetitions.
+        lattice = self.make_period_lattice(elliptic)
+        self.draw_period_lattice(lattice)
+
+        # 4. Select one fundamental parallelogram while neighboring copies
+        #    remain faintly visible as context.
+        cell = self.make_fundamental_cell(cover, lattice)
+        self.highlight_fundamental_cell(cell, lattice)
+
+        # 5. Mark the two pairs of opposite edges with stable u mod Lambda
+        #    meaning rather than decorative screen-space colors.
+        edge_marks = self.make_edge_identifications(cell, elliptic)
+        self.show_edge_identifications(edge_marks)
+
+        # 6. First quotient: identify one period to obtain a cylinder.
+        cylinder = self.wrap_cell_to_cylinder(cell, edge_marks)
+
+        # 7. Second quotient: identify the remaining period to obtain the
+        #    ordinary embedded torus used to display C / Lambda.
+        torus = self.wrap_cylinder_to_torus(cylinder, edge_marks)
+
+        # 8. End on a slow 3-D rotation.  The Wegert texture remains locked to
+        #    the same u mod Lambda coordinates throughout the whole shot.
+        self.orbit_finished_torus(torus)
+
+    def require_unfinished_dependencies(self ∈ TelemanEllipticPlaneToTorus) → None:
+        raise RuntimeError(
+            "design skeleton only: blocked by yt-shorts#4, wegert#19, ithon#4"
+        )
+
+    # ------------------------------------------------------------------
+    # Exact elliptic source data
+    # ------------------------------------------------------------------
+
+    def make_teleman_elliptic_function(self ∈ TelemanEllipticPlaneToTorus):
+        """
+        Return the fixed-k data for
+
+            z(u) = 1 / sn(u, k).
+
+        Required fields / callable boundary:
+        - k, with 0 < k < 1 for the first shot;
+        - K = complete_elliptic_K(k);
+        - K_prime = complete_elliptic_K(sqrt(1-k^2));
+        - omega_1 = 4*K;
+        - omega_2 = 2*i*K_prime;
+        - sn(u, k);
+        - z(u) = 1/sn(u,k);
+        - dz_du(u), preferably from the Jacobi identities rather than a
+          finite-difference approximation.
+
+        Required tests before rendering:
+        - dz_du(u)^2 ~= (z(u)^2 - 1)*(z(u)^2 - k^2);
+        - z(u + omega_1) ~= z(u);
+        - z(u + omega_2) ~= z(u);
+        away from poles.
+        """
+        raise NotImplementedError("needs explicit Jacobi elliptic evaluator")
+
+    def make_wegert_colored_complex_plane(self ∈ TelemanEllipticPlaneToTorus, elliptic):
+        """
+        Build a plane parameterized directly by u in C.
+
+        At every u, evaluate z(u)=1/sn(u,k), then feed that complex value into
+        Wegert's production coloring core.  No image tiling is permitted: the
+        repetition visible after zooming out must arise because z(u) itself is
+        doubly periodic.
+        """
+        raise NotImplementedError("depends on wegert#19 and elliptic evaluator")
+
+    # ------------------------------------------------------------------
+    # Covering-plane reveal
+    # ------------------------------------------------------------------
+
+    def zoom_out_to_reveal_periodicity(self ∈ TelemanEllipticPlaneToTorus, cover) → None:
+        """Animate camera scale only; do not scale the mathematical periods."""
+        raise NotImplementedError("camera choreography")
+
+    def make_period_lattice(self ∈ TelemanEllipticPlaneToTorus, elliptic):
+        """
+        Build the lattice from the actual periods
+
+            omega_1 = 4 K(k)
+            omega_2 = 2 i K'(k).
+        """
+        raise NotImplementedError("depends on Manimi lattice overlay boundary")
+
+    def draw_period_lattice(self ∈ TelemanEllipticPlaneToTorus, lattice) → None:
+        """Draw omega_1, omega_2, then faint translated parallelogram lines."""
+        raise NotImplementedError("depends on yt-shorts#4")
+
+    # ------------------------------------------------------------------
+    # Fundamental domain and quotient cues
+    # ------------------------------------------------------------------
+
+    def make_fundamental_cell(self ∈ TelemanEllipticPlaneToTorus, cover, lattice):
+        """Return one textured period parallelogram with stable quotient UVs."""
+        raise NotImplementedError("depends on yt-shorts#4")
+
+    def highlight_fundamental_cell(self ∈ TelemanEllipticPlaneToTorus, cell, lattice) → None:
+        """Brighten one cell and fade neighboring repeats without retessellating."""
+        raise NotImplementedError("storyboard beat 4")
+
+    def make_edge_identifications(self ∈ TelemanEllipticPlaneToTorus, cell, elliptic):
+        """
+        Return persistent cues for the two opposite-edge pairs.
+
+        Cues must correspond exactly to translation by omega_1 and omega_2,
+        hence to actual equal values of z(u), not merely decorative edge marks.
+        """
+        raise NotImplementedError("depends on yt-shorts#4")
+
+    def show_edge_identifications(self ∈ TelemanEllipticPlaneToTorus, edge_marks) → None:
+        raise NotImplementedError("storyboard beat 5")
+
+    # ------------------------------------------------------------------
+    # Flat → cylinder → torus
+    # ------------------------------------------------------------------
+
+    def wrap_cell_to_cylinder(self ∈ TelemanEllipticPlaneToTorus, cell, edge_marks):
+        """
+        Identify one period while preserving u mod Lambda texture coordinates.
+
+        Preferred: continuous 3-D bend.
+        Allowed fallback: editorial cut to a cylinder with exact UV continuity.
+        """
+        raise NotImplementedError("depends on textured quotient geometry in yt-shorts#4")
+
+    def wrap_cylinder_to_torus(self ∈ TelemanEllipticPlaneToTorus, cylinder, edge_marks):
+        """
+        Identify the second period and return an embedded torus.
+
+        The donut shape is an embedding used to display C/Lambda.  It is not a
+        claim that the original z-plane has literally been rolled into a torus.
+        """
+        raise NotImplementedError("depends on textured quotient geometry in yt-shorts#4")
+
+    def orbit_finished_torus(self ∈ TelemanEllipticPlaneToTorus, torus) → None:
+        """Slow final three-quarter camera orbit; no explanatory text blanket."""
+        raise NotImplementedError("final camera beat")

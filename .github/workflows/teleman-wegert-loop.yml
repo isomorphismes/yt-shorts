@@ -1,0 +1,51 @@
+name: Teleman Wegert loop
+
+on:
+  push:
+    paths:
+      - '.gitmodules'
+      - 'third_party/wegert'
+      - 'teleman-riemann-surface/**'
+      - '!teleman-riemann-surface/wegert-k-loop.mp4'
+      - '.github/workflows/teleman-wegert-loop.yml'
+  pull_request:
+    paths:
+      - '.gitmodules'
+      - 'third_party/wegert'
+      - 'teleman-riemann-surface/**'
+      - '!teleman-riemann-surface/wegert-k-loop.mp4'
+      - '.github/workflows/teleman-wegert-loop.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install headless OpenGL and ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg libegl1 libegl-mesa0 libgl1 libgl1-mesa-dri
+      - name: Render 7-second Wegert loop
+        working-directory: teleman-riemann-surface
+        run: python3 render_wegert_loop.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: teleman-wegert-k-loop
+          path: teleman-riemann-surface/wegert-k-loop.mp4
+      - name: Commit rendered movie to this branch
+        if: github.event_name != 'pull_request'
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -f teleman-riemann-surface/wegert-k-loop.mp4
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m 'Add rendered Wegert k-loop [skip ci]'
+          git push origin HEAD:${GITHUB_REF_NAME}
