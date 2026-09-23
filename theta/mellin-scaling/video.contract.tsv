@@ -1,0 +1,20 @@
+# This contract belongs to the theta Mellin episode. The regions, times, and
+# MAE thresholds describe its named storyboard witnesses, not universal motion.
+video_decode	THETA-DECODE	theta-mellin-scaling-preview.mp4
+video_dimensions	THETA-SHAPE	theta-mellin-scaling-preview.mp4	540	960
+video_duration	THETA-DURATION	theta-mellin-scaling-preview.mp4	14.95	15.05
+video_fps	THETA-FPS	theta-mellin-scaling-preview.mp4	15	0.01
+video_audio	THETA-AUDIO	theta-mellin-scaling-preview.mp4	absent
+video_encoding	THETA-ENCODING	theta-mellin-scaling-preview.mp4	h264	yuv420p
+
+# Graph and width witnesses: n=1 at 1.25 s versus n=3 at 4.50 s.
+# Accepted render MAE: 10.641969. The minimum leaves more than 2x margin.
+video_frame_mae	THETA-COMPRESSES	theta-mellin-scaling-preview.mp4	1.25	4.50	59	190	422	430	5	255
+
+# The n=3 graph and 1/9 witnesses must hold through the episode's explicit freeze.
+# Accepted render MAE: 0.002054. The maximum leaves about 48x codec margin.
+video_frame_mae	THETA-N3-FREEZE	theta-mellin-scaling-preview.mp4	4.80	6.20	59	190	422	430	0	0.1
+
+# The lower explanation must change only after that freeze to introduce u=9x.
+# Accepted render MAE: 9.402355. The minimum leaves more than 3x margin.
+video_frame_mae	THETA-SUBSTITUTION-FOLLOWS	theta-mellin-scaling-preview.mp4	6.10	7.20	59	640	422	210	3	255

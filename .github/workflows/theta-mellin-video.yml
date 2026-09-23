@@ -1,0 +1,30 @@
+name: Theta Mellin finished video
+
+on:
+  push:
+    paths:
+      - .github/workflows/theta-mellin-video.yml
+      - theta/mellin-scaling/**
+  pull_request:
+    paths:
+      - .github/workflows/theta-mellin-video.yml
+      - theta/mellin-scaling/**
+
+permissions:
+  contents: read
+
+jobs:
+  finished-video:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Install FFmpeg probes
+        shell: sh
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ffmpeg
+      - name: Verify the committed review render
+        uses: isomorphisms/ai-ci/video@1ecde1ff3bcea2de371e9198ef49aad8d1f91315
+        with:
+          contract: theta/mellin-scaling/video.contract.tsv
+          root: theta/mellin-scaling

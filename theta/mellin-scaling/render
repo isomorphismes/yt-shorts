@@ -1,0 +1,31 @@
+#!/usr/bin/env ysh
+
+# Grease/YSH entry point for the theta Mellin scaling Short.
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
+if ! command -v ithon >/dev/null 2>&1; then
+  printf 'render: Ithon is required; expected an ithon executable on PATH\n' >&2
+  exit 127
+fi
+
+if ! command -v ffmpeg >/dev/null 2>&1; then
+  printf 'render: ffmpeg is required\n' >&2
+  exit 127
+fi
+
+case "${1:-}" in
+  --preview)
+    export SHORTS_PREVIEW=1
+    ;;
+  '')
+    ;;
+  *)
+    printf 'usage: %s [--preview]\n' "$0" >&2
+    exit 64
+    ;;
+esac
+
+cd "$SCRIPT_DIR"
+exec ithon scene.pi

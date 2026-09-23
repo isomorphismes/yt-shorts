@@ -1,0 +1,380 @@
+"""Render the horizontal-scaling step in the theta Mellin calculation.
+
+Source: Richard E. Borcherds, "Modular forms: Theta functions",
+9:29-12:41: https://www.youtube.com/watch?v=9xQd9Ab8iNg&t=569s
+
+The scene is authored in Ithon and uses only its standard library.  It writes
+SVG frames and asks ffmpeg to encode them, so there is no Python, NumPy,
+Matplotlib, or Manim production dependency.
+"""
+
+from html import escape
+from math import cos, exp, pi, radians, sin
+from os import environ
+from pathlib import Path
+from subprocess import run
+from tempfile import TemporaryDirectory
+
+
+FPS ← 15 if environ.get("SHORTS_PREVIEW") == "1" else 30
+PIXEL_WIDTH ← 540 if environ.get("SHORTS_PREVIEW") == "1" else 1080
+PIXEL_HEIGHT ← 960 if environ.get("SHORTS_PREVIEW") == "1" else 1920
+SECONDS ← 15
+FRAME_COUNT ← FPS * SECONDS
+HERE ← Path(__file__).resolve().parent
+MEDIA ← HERE / "media"
+OUTPUT ← MEDIA / (
+    "theta-mellin-scaling-preview.mp4"
+    if environ.get("SHORTS_PREVIEW") == "1"
+    else "theta-mellin-scaling.mp4"
+)
+
+
+# These are the HCL conversion and constants from isomorphisms/wegert's
+# renderer-independent coloring core at commit
+# 6452974f7fdb63a933c849d068d10f2d87fbefe5.  The graph uses selected phase
+# hues as a semantic palette; it does not claim that a positive real Gaussian
+# has several phases.
+def srgb_component(linear_value):
+    value ← max(linear_value, 0.0)
+    if value <= 0.0031308:
+        return 12.92 * value
+    return 1.055 * value ** (1.0 / 2.4) - 0.055
+
+
+def wegert_hcl_hex(hue_degrees, chroma=45.0, lightness=68.0):
+    hue ← radians(hue_degrees)
+    u_star ← chroma * cos(hue)
+    v_star ← chroma * sin(hue)
+    white_u_prime ← 0.19783982482140777
+    white_v_prime ← 0.46833630293240974
+
+    if lightness > 8.0:
+        y ← ((lightness + 16.0) / 116.0) ** 3.0
+    else:
+        y ← lightness / 903.2962962962963
+
+    u_prime ← u_star / (13.0 * lightness) + white_u_prime
+    v_prime ← v_star / (13.0 * lightness) + white_v_prime
+    x ← (9.0 * y * u_prime) / (4.0 * v_prime)
+    z ← y * (12.0 - 3.0 * u_prime - 20.0 * v_prime) / (4.0 * v_prime)
+
+    linear_red ← 3.2404542 * x - 1.5371385 * y - 0.4985314 * z
+    linear_green ← -0.9692660 * x + 1.8760108 * y + 0.0415560 * z
+    linear_blue ← 0.0556434 * x - 0.2040259 * y + 1.0572252 * z
+    channels ← [
+        srgb_component(linear_red),
+        srgb_component(linear_green),
+        srgb_component(linear_blue),
+    ]
+    integers ← [round(255 * min(max(channel, 0.0), 1.0)) for channel in channels]
+    return "#" + "".join(f"{channel:02X}" for channel in integers)
+
+
+BACKGROUND ← "#11131A"
+PAPER ← "#F3EBDD"
+MUTED ← "#A8ABB4"
+GRID ← "#343946"
+REFERENCE ← wegert_hcl_hex(0)
+GOLD ← wegert_hcl_hex(60)
+GREEN ← wegert_hcl_hex(120)
+ACTIVE ← wegert_hcl_hex(210)
+VIOLET ← wegert_hcl_hex(300)
+
+
+GRAPH_LEFT ← 118.0
+GRAPH_RIGHT ← 962.0
+GRAPH_TOP ← 380.0
+GRAPH_BOTTOM ← 1115.0
+X_MAX ← 1.10
+SAMPLES ← 180
+
+
+def ease(value):
+    clipped ← min(max(value, 0.0), 1.0)
+    return clipped * clipped * (3.0 - 2.0 * clipped)
+
+
+def mix(first, second, amount):
+    return first + (second - first) * amount
+
+
+def n_at(second):
+    if second <= 1.25:
+        return 1.0
+    if second >= 4.50:
+        return 3.0
+    return mix(1.0, 3.0, ease((second - 1.25) / 3.25))
+
+
+def graph_x(value):
+    return GRAPH_LEFT + value / X_MAX * (GRAPH_RIGHT - GRAPH_LEFT)
+
+
+def graph_y(value):
+    return GRAPH_BOTTOM - value * (GRAPH_BOTTOM - GRAPH_TOP)
+
+
+def text(x, y, content, size, color=PAPER, anchor="middle", weight="normal", opacity=1.0):
+    return (
+        f'<text x="{x:.1f}" y="{y:.1f}" text-anchor="{anchor}" '
+        f'font-family="DejaVu Sans, sans-serif" font-size="{size}" '
+        f'font-weight="{weight}" fill="{color}" fill-opacity="{opacity:.3f}">'
+        f'{escape(content)}</text>'
+    )
+
+
+def math_text(x, y, markup, size, color=PAPER, anchor="middle", weight="normal", opacity=1.0):
+    return (
+        f'<text x="{x:.1f}" y="{y:.1f}" text-anchor="{anchor}" '
+        f'font-family="DejaVu Serif, serif" font-size="{size}" '
+        f'font-weight="{weight}" fill="{color}" fill-opacity="{opacity:.3f}">'
+        f'{markup}</text>'
+    )
+
+
+def line(x1, y1, x2, y2, color, width=3.0, opacity=1.0, dash=None):
+    dash_attribute ← "" if dash is None else f' stroke-dasharray="{dash}"'
+    return (
+        f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" '
+        f'stroke="{color}" stroke-width="{width:.1f}" stroke-opacity="{opacity:.3f}"'
+        f'{dash_attribute}/>'
+    )
+
+
+def curve_path(n):
+    points ← []
+    for index in range(SAMPLES + 1):
+        x_value ← X_MAX * index / SAMPLES
+        y_value ← exp(-pi * n * n * x_value)
+        command ← "M" if index == 0 else "L"
+        points.append(f"{command}{graph_x(x_value):.1f},{graph_y(y_value):.1f}")
+    return " ".join(points)
+
+
+def fill_path(n):
+    points ← [f"M{graph_x(0):.1f},{GRAPH_BOTTOM:.1f}"]
+    for index in range(SAMPLES + 1):
+        x_value ← X_MAX * index / SAMPLES
+        y_value ← exp(-pi * n * n * x_value)
+        points.append(f"L{graph_x(x_value):.1f},{graph_y(y_value):.1f}")
+    points.append(f"L{graph_x(X_MAX):.1f},{GRAPH_BOTTOM:.1f} Z")
+    return " ".join(points)
+
+
+def double_arrow(x1, x2, y, color, opacity=1.0):
+    head ← 13.0
+    parts ← [line(x1, y, x2, y, color, 4.0, opacity)]
+    parts.append(line(x1, y, x1 + head, y - head / 2, color, 4.0, opacity))
+    parts.append(line(x1, y, x1 + head, y + head / 2, color, 4.0, opacity))
+    parts.append(line(x2, y, x2 - head, y - head / 2, color, 4.0, opacity))
+    parts.append(line(x2, y, x2 - head, y + head / 2, color, 4.0, opacity))
+    return "".join(parts)
+
+
+def frame_svg(frame_index):
+    second ← frame_index / FPS
+    n ← n_at(second)
+    inverse_square ← 1.0 / (n * n)
+    parts ← [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{PIXEL_WIDTH}" '
+        f'height="{PIXEL_HEIGHT}" viewBox="0 0 1080 1920">',
+        f'<rect width="1080" height="1920" fill="{BACKGROUND}"/>',
+        text(540, 104, "Mellin sees horizontal scale", 48, PAPER, weight="bold"),
+        text(540, 166, "one theta term", 29, MUTED),
+        math_text(
+            540,
+            292,
+            'e<tspan baseline-shift="super" font-size="65%">−π n²x</tspan>',
+            72,
+            ACTIVE,
+        ),
+    ]
+
+    # Plot frame and a restrained fixed grid.
+    parts.append(
+        f'<rect x="{GRAPH_LEFT:.1f}" y="{GRAPH_TOP:.1f}" '
+        f'width="{GRAPH_RIGHT - GRAPH_LEFT:.1f}" height="{GRAPH_BOTTOM - GRAPH_TOP:.1f}" '
+        f'fill="#171B24" stroke="{GRID}" stroke-width="3"/>'
+    )
+    for tick, tick_label in [(0.25, "¼"), (0.50, "½"), (0.75, "¾"), (1.00, "1")]:
+        px ← graph_x(tick)
+        parts.append(line(px, GRAPH_TOP, px, GRAPH_BOTTOM, GRID, 2.0, 0.58))
+        parts.append(text(px, GRAPH_BOTTOM + 43, tick_label, 24, MUTED))
+    for tick in [0.25, 0.50, 0.75]:
+        py ← graph_y(tick)
+        parts.append(line(GRAPH_LEFT, py, GRAPH_RIGHT, py, GRID, 2.0, 0.58))
+
+    parts.append(text(GRAPH_LEFT - 22, GRAPH_BOTTOM + 8, "0", 24, MUTED, anchor="end"))
+    parts.append(text(GRAPH_RIGHT, GRAPH_BOTTOM + 88, "x", 30, MUTED, anchor="end"))
+
+    # The fixed n=1 area remains visible behind the compressed copy.
+    parts.append(f'<path d="{fill_path(1.0)}" fill="{REFERENCE}" fill-opacity="0.105"/>')
+    parts.append(
+        f'<path d="{curve_path(1.0)}" fill="none" stroke="{REFERENCE}" '
+        f'stroke-width="6" stroke-opacity="0.82" stroke-dasharray="15 12"/>'
+    )
+    parts.append(f'<path d="{fill_path(n)}" fill="{ACTIVE}" fill-opacity="0.34"/>')
+    parts.append(
+        f'<path d="{curve_path(n)}" fill="none" stroke="{ACTIVE}" '
+        f'stroke-width="9" stroke-linecap="round"/>'
+    )
+    parts.append(text(GRAPH_RIGHT - 24, GRAPH_TOP + 48, "n = 1 reference", 25, REFERENCE, anchor="end"))
+
+    if second <= 1.25:
+        n_label ← "n = 1"
+    elif second < 4.50:
+        n_label ← f"n = {n:.1f}"
+    else:
+        n_label ← "n = 3"
+    parts.append(text(GRAPH_RIGHT - 24, GRAPH_TOP + 94, n_label, 31, ACTIVE, anchor="end", weight="bold"))
+
+    # The same x-coordinate witness: 1 for the reference, 1/n² after squeeze.
+    reference_x ← graph_x(1.0)
+    active_x ← graph_x(inverse_square)
+    parts.append(line(reference_x, GRAPH_TOP + 126, reference_x, GRAPH_BOTTOM, REFERENCE, 3.0, 0.55, "10 10"))
+    parts.append(line(active_x, GRAPH_TOP + 126, active_x, GRAPH_BOTTOM, GOLD, 4.0, 0.92, "10 9"))
+    bracket_y ← GRAPH_BOTTOM + 118
+    parts.append(double_arrow(GRAPH_LEFT, reference_x, bracket_y, REFERENCE, 0.62))
+    parts.append(text((GRAPH_LEFT + reference_x) / 2, bracket_y - 22, "1", 28, REFERENCE, weight="bold"))
+    parts.append(double_arrow(GRAPH_LEFT, active_x, bracket_y + 62, GOLD, 0.96))
+
+    if second >= 4.50:
+        width_label ← "1/9"
+    elif n < 1.08:
+        width_label ← "1"
+    else:
+        width_label ← "1/n²"
+    parts.append(text((GRAPH_LEFT + active_x) / 2, bracket_y + 48, width_label, 28, GOLD, weight="bold"))
+
+    if second < 1.25:
+        parts.append(text(540, 1375, "Start with the reference area.", 38, PAPER, weight="bold"))
+        parts.append(text(540, 1440, "height unchanged", 30, MUTED))
+    elif second < 4.50:
+        parts.append(text(540, 1370, "The graph is squeezed horizontally.", 38, PAPER, weight="bold"))
+        parts.append(math_text(540, 1455, 'width: 1 → 1/n²', 42, GOLD))
+        parts.append(math_text(540, 1525, 'area: 1 → 1/n²', 42, ACTIVE))
+    elif second < 6.50:
+        emphasis ← ease((second - 4.50) / 0.35)
+        parts.append(text(540, 1360, "n = 3", 34, MUTED))
+        parts.append(math_text(540, 1455, 'width ÷ 9', 50, GOLD, weight="bold", opacity=emphasis))
+        parts.append(math_text(540, 1545, 'area ÷ 9', 50, ACTIVE, weight="bold", opacity=emphasis))
+        parts.append(math_text(540, 1640, 'Aₙ / A₁ = n<tspan baseline-shift="super" font-size="65%">−2</tspan>', 46, PAPER))
+    elif second < 8.75:
+        parts.append(text(540, 1350, "Rename the stretched coordinate.", 35, PAPER, weight="bold"))
+        parts.append(math_text(540, 1450, 'u = 9x', 58, GOLD, weight="bold"))
+        parts.append(math_text(540, 1540, 'x = u/9', 43, MUTED))
+        parts.append(math_text(540, 1620, 'dx = du/9', 47, ACTIVE))
+        map_amount ← ease((second - 6.50) / 0.60)
+        map_y ← GRAPH_TOP + 250
+        parts.append(double_arrow(active_x, reference_x, map_y, GOLD, map_amount))
+        parts.append(text((active_x + reference_x) / 2, map_y - 25, "u = 9x", 27, GOLD, opacity=map_amount, weight="bold"))
+    elif second < 11.75:
+        parts.append(text(540, 1334, "For a general Mellin weight", 33, MUTED))
+        parts.append(
+            math_text(
+                540,
+                1425,
+                'x<tspan baseline-shift="super" font-size="65%">s/2−1</tspan> dx',
+                55,
+                PAPER,
+                weight="bold",
+            )
+        )
+        parts.append(
+            math_text(
+                540,
+                1525,
+                'n<tspan baseline-shift="super" font-size="65%">2−s</tspan> · '
+                'n<tspan baseline-shift="super" font-size="65%">−2</tspan>',
+                51,
+                VIOLET,
+            )
+        )
+        parts.append(
+            math_text(
+                540,
+                1625,
+                '= n<tspan baseline-shift="super" font-size="65%">−s</tspan>',
+                60,
+                GREEN,
+                weight="bold",
+            )
+        )
+    else:
+        reveal ← ease((second - 11.75) / 0.45)
+        parts.append(
+            math_text(
+                540,
+                1365,
+                'one theta term  →  n<tspan baseline-shift="super" font-size="65%">−s</tspan>',
+                48,
+                ACTIVE,
+                weight="bold",
+                opacity=reveal,
+            )
+        )
+        parts.append(
+            math_text(
+                540,
+                1495,
+                '∑<tspan baseline-shift="sub" font-size="58%">n≥1</tspan> '
+                'n<tspan baseline-shift="super" font-size="58%">−s</tspan> = ζ(s)',
+                60,
+                GREEN,
+                weight="bold",
+                opacity=reveal,
+            )
+        )
+        parts.append(
+            math_text(
+                540,
+                1595,
+                'common factor: Γ(s/2) π<tspan baseline-shift="super" font-size="62%">−s/2</tspan>',
+                37,
+                MUTED,
+                opacity=reveal,
+            )
+        )
+        parts.append(text(540, 1675, "for Re(s) > 1", 27, MUTED, opacity=reveal))
+
+    parts.append(text(540, 1840, "Richard Borcherds · Modular forms: Theta functions · 9:29–12:41", 24, MUTED))
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def render():
+    MEDIA.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(prefix="theta-mellin-frames-") as temporary:
+        frames ← Path(temporary)
+        for frame_index in range(FRAME_COUNT):
+            frame ← frames / f"frame-{frame_index:04d}.svg"
+            frame.write_text(frame_svg(frame_index), encoding="utf-8")
+
+        command ← [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-framerate",
+            str(FPS),
+            "-i",
+            str(frames / "frame-%04d.svg"),
+            "-c:v",
+            "libx264",
+            "-preset",
+            "medium",
+            "-crf",
+            "20",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            str(OUTPUT),
+        ]
+        run(command, check=True)
+    print(OUTPUT)
+
+
+render()
